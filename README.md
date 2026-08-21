@@ -14,8 +14,8 @@ Locust-based HLS load tester with player-level KPIs.
 - `locustfile.py`: Locust user and custom metrics reporting
 - `streaming.py`: HLS session loop (manifest polling + segment fetching)
 - `player.py`: Buffer model and underrun logic
-- `start_hls_encoding.sh`: Starts FFmpeg and HTTP server for a local live stream
-- `hls_http_server.py`: HTTP server with explicit MIME mapping for HLS
+- `tools/start_hls_encoding.sh`: Starts FFmpeg and HTTP server for a local live stream
+- `tools/hls_http_server.py`: HTTP server with explicit MIME mapping for HLS
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ Locust-based HLS load tester with player-level KPIs.
 Optional development tooling (for local stream generation only):
 
 - FFmpeg available in `PATH`
-- Bash (`start_hls_encoding.sh` is intended to run on Linux)
+- Bash (`tools/start_hls_encoding.sh` is intended to run on Linux)
 
 ## Setup
 
@@ -57,20 +57,21 @@ Open the Locust UI at `http://localhost:8089`, start a test, and watch request s
 
 This helper flow targets Linux and exists for local development convenience.
 
-In terminal A:
+In terminal A (from repo root):
 
 ```bash
+cd tools
 ./start_hls_encoding.sh
 ```
 
 This script:
 
 - Starts FFmpeg in the background
-- Writes live HLS output into `hls_output/`
-- Serves `hls_output/` on `http://localhost:8080/`
+- Writes live HLS output into `tools/hls_output/`
+- Serves `tools/hls_output/` on `http://localhost:8080/`
 - Cleans up on exit (`Ctrl+C`)
 
-In terminal B:
+In terminal B (repo root):
 
 ```bash
 locust -f locustfile.py --host http://localhost:8080/stream.m3u8
@@ -99,7 +100,7 @@ Notes:
 
 ## MIME types for HLS
 
-`hls_http_server.py` explicitly serves:
+`tools/hls_http_server.py` explicitly serves:
 
 - `.m3u8` as `application/vnd.apple.mpegurl`
 - `.ts` as `video/mp2t`
@@ -113,5 +114,5 @@ This repo is a load-test harness, not a full RFC validator. It helps test practi
 ## Troubleshooting
 
 - `ffmpeg: command not found`: install FFmpeg and add it to `PATH`
-- Port conflicts: change `PORT` in `start_hls_encoding.sh`
+- Port conflicts: change `PORT` in `tools/start_hls_encoding.sh`
 - Immediate session stop in Locust: check stream URL and that `stream.m3u8` is reachable
