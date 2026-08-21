@@ -1,6 +1,6 @@
 import statistics
 
-from gevent import sleep
+import gevent
 from locust import FastHttpUser, constant, task
 from locust import events
 from locust.event import EventHook
@@ -94,7 +94,7 @@ class HLSUser(FastHttpUser):
         if self.host is None:
             raise ValueError("host must be set for HLSUser")
 
-        self._stream = HLSSession(self.host, self.client, sleep)
+        self._stream = HLSSession(self.host, self.client, gevent.sleep)
 
     @task
     def stream(self):
