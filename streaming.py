@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from typing import Callable
@@ -13,12 +14,12 @@ class HLSSession:
                  playlist: str,
                  session: FastHttpSession,
                  sleep: Callable[[float], None],
-                 userid: str = str(uuid.uuid4())
+                 userid: str = None,
                  ) -> None:
         self._playlist = playlist
         self._session = session
         self._sleep = sleep
-        self._userid = userid
+        self._userid = userid if userid else str(uuid.uuid4())
 
         self._player = ABRModel(3)
         self._last_playlist_fingerprint = ()
@@ -102,24 +103,26 @@ class HLSSession:
 
                     # start play
                     self._player.start_playing()
+                    self._session.user.environment.startup_time_event.fire(time=self._player.startup_time, userid=self.userid)
 
                 else:
                     self._last_playlist_fingerprint = self.playlist_fingerprint(playlist)
 
                     # changed playlist, get next segment after the last seen one
-                    try:
-                        media_segment = next((s for s in playlist.segments if s.media_sequence > self._last_media_sequence_seen))
+                    media_segment = next((s for s in playlist.segments if s.media_sequence > self._last_media_sequence_seen), None)
+                    if media_segment is None:
+                        raise Exception(f"manifest changed, but no new segment seen?!")
 
-                        response = self._session.get(media_segment.absolute_uri)
-                        response.raise_for_status()
+                    response = self._session.get(media_segment.absolute_uri)
+                    response.raise_for_status()
 
-                        self._player.add_segment(Segment(media_segment.media_sequence, media_segment.duration))
-                        self._last_media_sequence_seen = media_segment.media_sequence
-                    except StopIteration:
-                        assert False, f"manifest changed, but no new segment seen?!"
+                    self._player.add_segment(Segment(media_segment.media_sequence, media_segment.duration))
+                    self._last_media_sequence_seen = media_segment.media_sequence
+
 
             # advance player
             self._player.advance()
+            self._session.user.environment.buffer_level_event.fire(level=self._player.buffer_level[1], userid=self.userid)
 
             # wait
             self._sleep(max(0, self._fetch_playlist_at - time.monotonic()))
@@ -127,9 +130,9 @@ class HLSSession:
             return True
 
         except BufferUnderrun:
-            print("Buffer underrun")
+            logging.warning(f"Buffer underrun for user {self.userid}, stopping session")
+            self._session.user.environment.buffer_level_event.fire(level=-1, userid=self.userid)
             return False
-
-    def stop(self):
-        """Stop streaming and cleanup the session."""
-        pass
+        except Exception as e:
+            logging.exception(f"Error in HLS session for user {self.userid}: {e}")
+            return False

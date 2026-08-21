@@ -20,7 +20,7 @@ cleanup() {
   echo "Stopping ffmpeg (PID $FFMPEG_PID)..."
   kill "$FFMPEG_PID" 2>/dev/null
   wait "$FFMPEG_PID" 2>/dev/null
-  rm -rf $HLS_DIR
+  rm -rf "$HLS_DIR"
   echo "Done."
 }
 trap cleanup EXIT INT TERM

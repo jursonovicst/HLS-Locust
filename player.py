@@ -58,6 +58,7 @@ class ABRModel:
     def add_segment(self, segment: Segment) -> None:
         # segments are added in order
         self._segment_buffer.append(segment)
+        self._buffer_at += segment.duration
 
     def advance(self) -> None:
         """Player control logic, return the time for the next segment."""
@@ -71,6 +72,12 @@ class ABRModel:
                 self._play_at += segment.duration
         except IndexError as e:
             raise BufferUnderrun(e)
+
+    @property
+    def startup_time(self) -> float| None:
+        if self._start_buffering_at < 0 or self._start_play_at < 0:
+            return None
+        return self._start_play_at - self._start_buffering_at
 
     @property
     def buffer_level(self) -> Tuple[int, float]:
