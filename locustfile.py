@@ -98,7 +98,6 @@ class HLSUser(FastHttpUser):
 
     @task
     def stream(self):
-        self.environment.buffer_level_event.fire(level=2.5, userid="abc")
         if not self._stream.step():
             print(f"exit user {self._stream.userid}")
             self.stop(force=True)
