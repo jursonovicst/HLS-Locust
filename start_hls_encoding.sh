@@ -11,11 +11,16 @@ PLAYLIST="$HLS_DIR/stream.m3u8"
 SEGMENT_DURATION=2       # seconds per segment
 SEGMENT_LIST_SIZE=5      # number of segments kept in playlist (live window)
 PORT=8080                # HTTP port to serve the stream (optional, see bottom)
-
+CLEANUP_DONE=0
 mkdir -p "$HLS_DIR"
 
 # ── Cleanup on exit (Ctrl+C or normal exit) ───
 cleanup() {
+  if [ "$CLEANUP_DONE" -eq 1 ]; then
+    return
+  fi
+  CLEANUP_DONE=1
+
   echo ""
   echo "Stopping ffmpeg (PID $FFMPEG_PID)..."
   kill "$FFMPEG_PID" 2>/dev/null
@@ -60,9 +65,6 @@ echo "ffmpeg started (PID $FFMPEG_PID)"
 sleep 2
 
 # ── 2. Start HTTP server (foreground) ─────────
-echo "Serving HLS at http://localhost:$PORT/stream.m3u8"
-echo "Press Ctrl+C to stop."
-echo ""
-python3 -m http.server "$PORT" --directory "$HLS_DIR"
+python3 hls_http_server.py "$PORT" "$HLS_DIR"
 
 # cleanup() is called automatically when python exits
