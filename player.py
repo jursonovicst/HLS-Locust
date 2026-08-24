@@ -17,14 +17,21 @@ class ABRModel:
 
     def __init__(self, buffer_target_n: int):
         self._buffer_target_n = buffer_target_n
+        self._init_state()
+
+    def _init_state(self) -> None:
+        """Initialize mutable playback state"""
         self._target_duration: float = -1
         self._segment_buffer: List[Segment] = []
-
         self._start_buffering_at: float = -1
         self._start_play_at: float = -1
         self._play_at: float = -1
         self._buffer_at: float = -1
         self._next_fetch_at: float = -1
+
+    def reset(self) -> None:
+        """Reset playback state"""
+        self._init_state()
 
     @property
     def buffer_target_n(self) -> int:

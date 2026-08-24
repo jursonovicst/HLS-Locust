@@ -1,10 +1,11 @@
 import logging
 import time
 import uuid
+from collections import deque
 from typing import Callable
 
 import m3u8
-from locust.contrib.fasthttp import FastHttpSession
+from locust.contrib.fasthttp import FastHttpSession, FastResponse
 
 from player import ABRModel, Segment, BufferUnderrun
 
@@ -22,9 +23,14 @@ class HLSSession:
         self._userid = userid if userid else str(uuid.uuid4())
 
         self._player = ABRModel(3)
+        self._init_state()
+
+    def _init_state(self) -> None:
+        """Initialize mutable playback state"""
         self._last_playlist_fingerprint = ()
         self._fetch_playlist_at: float = -1
         self._last_media_sequence_seen: int = -1
+        self._throughput_samples = deque(maxlen=3)
 
     @classmethod
     def playlist_fingerprint(cls, playlist: m3u8.M3U8) -> tuple:
@@ -39,6 +45,12 @@ class HLSSession:
     @property
     def userid(self) -> str:
         return self._userid
+
+    @property
+    def throughput_bps(self) -> float:
+        if not self._throughput_samples:
+            return 0.0
+        return sum(self._throughput_samples) / len(self._throughput_samples)
 
     def _fetch_manifest(self) -> m3u8.M3U8:
         # fetch playlist
@@ -66,6 +78,18 @@ class HLSSession:
             return self._fetch_manifest()
         else:
             return playlist
+
+    def _fetch_segment(self, uri: str) -> FastResponse:
+        t0 = time.perf_counter()
+        response = self._session.get(uri)
+        response.raise_for_status()
+
+        self._sleep(2.5)  # simulate some processing time for the segment, TODO: remove
+
+        elapsed_s = max(time.perf_counter() - t0, 1e-6)
+        size_bytes = len(response.content or b"")
+        self._throughput_samples.append((size_bytes * 8) / elapsed_s)
+        return response
 
     def step(self) -> bool:
         """Advance the session by one step. Return True if the session is still active, False if it has ended."""
@@ -95,8 +119,7 @@ class HLSSession:
                     # fill buffer ASAP and start play
                     for media_segment in playlist.segments[-self._player.buffer_target_n:]:
                         # download segment
-                        response = self._session.get(media_segment.absolute_uri)
-                        response.raise_for_status()
+                        self._fetch_segment(media_segment.absolute_uri)
 
                         self._player.add_segment(Segment(media_segment.media_sequence, media_segment.duration))
                         self._last_media_sequence_seen = media_segment.media_sequence
@@ -113,12 +136,10 @@ class HLSSession:
                     if media_segment is None:
                         raise Exception(f"manifest changed, but no new segment seen?!")
 
-                    response = self._session.get(media_segment.absolute_uri)
-                    response.raise_for_status()
+                    self._fetch_segment(media_segment.absolute_uri)
 
                     self._player.add_segment(Segment(media_segment.media_sequence, media_segment.duration))
                     self._last_media_sequence_seen = media_segment.media_sequence
-
 
             # advance player
             self._player.advance()
@@ -127,12 +148,21 @@ class HLSSession:
             # wait
             self._sleep(max(0, self._fetch_playlist_at - time.monotonic()))
 
+            logging.debug(f"{self.throughput_bps/1000/1000:.2f}Mbps, {self._player.buffer_level}")
             return True
 
-        except BufferUnderrun:
-            logging.warning(f"Buffer underrun for user {self.userid}, stopping session")
+        except BufferUnderrun as e:
+            # we simulate a use-case, where clients are constantly trying to rebuffer, so we just reset the playback state and continue
+            logging.warning(f"Buffer underrun {e}: rebuffering")
             self._session.user.environment.buffer_level_event.fire(level=-1, userid=self.userid)
-            return False
+
+            # reset playback to trigger rebuffering
+            self._init_state()
+            self._player.reset()
+
+            # wait a bit before retrying
+            self._sleep(1)
+            return True
         except Exception as e:
             logging.exception(f"Error in HLS session for user {self.userid}: {e}")
             return False
