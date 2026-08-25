@@ -1,3 +1,4 @@
+import os
 import statistics
 
 import gevent
@@ -88,6 +89,9 @@ def on_test_stop(environment, **kwargs):
 
 # ── Locust User ────────────────────────────────────────────────────────────────
 class HLSUser(FastHttpUser):
+    proxy_host = os.getenv("HTTP_PROXY_HOST")
+    proxy_port = int(os.getenv("HTTP_PROXY_PORT", '0')) or None
+
     wait_time = constant(0)
 
     def on_start(self) -> None:
