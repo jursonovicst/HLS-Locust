@@ -52,9 +52,9 @@ class HLSSession:
             return 0.0
         return sum(self._throughput_samples) / len(self._throughput_samples)
 
-    def _fetch_manifest(self) -> m3u8.M3U8:
+    def _fetch_manifest(self, name="manifest") -> m3u8.M3U8:
         # fetch playlist
-        with self._session.get(self._playlist, catch_response=True) as response:
+        with self._session.get(self._playlist, catch_response=True, name=name) as response:
             if response.status_code == 0:
                 response.failure(f"Failed to connect to the server: {response.error}")
                 response.raise_for_status()
@@ -79,12 +79,10 @@ class HLSSession:
         else:
             return playlist
 
-    def _fetch_segment(self, uri: str) -> FastResponse:
+    def _fetch_segment(self, uri: str, name="segment") -> FastResponse:
         t0 = time.perf_counter()
-        response = self._session.get(uri)
+        response = self._session.get(uri, name=name)
         response.raise_for_status()
-
-        self._sleep(2.5)  # simulate some processing time for the segment, TODO: remove
 
         elapsed_s = max(time.perf_counter() - t0, 1e-6)
         size_bytes = len(response.content or b"")
@@ -148,7 +146,7 @@ class HLSSession:
             # wait
             self._sleep(max(0, self._fetch_playlist_at - time.monotonic()))
 
-            logging.debug(f"{self.throughput_bps/1000/1000:.2f}Mbps, {self._player.buffer_level}")
+            logging.debug(f"{self.throughput_bps / 1000 / 1000:.2f}Mbps, {self._player.buffer_level}")
             return True
 
         except BufferUnderrun as e:
