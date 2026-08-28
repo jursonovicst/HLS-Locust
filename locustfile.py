@@ -8,11 +8,11 @@ from locust.event import EventHook
 
 from streaming import HLSSession
 
-buffer_level_event = EventHook()
+buffer_underrun_event = EventHook()
 startup_time_event = EventHook()
 
 # In-memory store for collected samples
-_buffer_level_samples: list[float] = []
+_buffer_underrun_samples: list[float] = []
 _startup_time_samples: list[float] = []
 
 
@@ -48,60 +48,60 @@ def _fmt(value: float | None) -> str:
     return "-" if value is None else f"{value:.3f}s"
 
 
-def _on_buffer_level(level: float, userid: str) -> None:
-    """Listener: store every buffer level sample."""
-    _buffer_level_samples.append(level)
+def _on_buffer_underrun(level: float, userid: str) -> None:
+    """Listener: store every buffer underrun sample."""
+    _buffer_underrun_samples.append(level)
 
 
 def _on_startup_time(time: float, userid: str) -> None:
-    """Listener: store every buffer level sample."""
+    """Listener: store every startup time sample."""
     _startup_time_samples.append(time)
 
 
-buffer_level_event.add_listener(_on_buffer_level)
+buffer_underrun_event.add_listener(_on_buffer_underrun)
 startup_time_event.add_listener(_on_startup_time)
 
 
 @events.init.add_listener
 def on_locust_init(environment, **kwargs):
-    environment.buffer_level_event = buffer_level_event
+    environment.buffer_underrun_event = buffer_underrun_event
     environment.startup_time_event = startup_time_event
 
 
 @events.test_stop.add_listener
 def on_test_stop(environment, **kwargs):
-    """Print metric matrix for buffer level and startup time when the test ends."""
-    buffer_stats = _calc_stats(_buffer_level_samples)
+    """Print metric matrix for buffer underrun and startup time when the test ends."""
+    buffer_stats = _calc_stats(_buffer_underrun_samples)
     startup_stats = _calc_stats(_startup_time_samples)
 
     if buffer_stats["samples"] == 0 and startup_stats["samples"] == 0:
         print("[custom-metrics] No samples collected.")
         return
 
-    print("\n── Custom Metrics Matrix ─────────────────────────────────────────────────────────")
-    print(f"{'Metric':<14} {'Samples':>8} {'Mean':>10} {'Median':>10} {'p05':>10} {'p95':>10} {'Min':>10} {'Max':>10}")
+    print("\n── Custom Metrics Matrix ─────────────────────────────────────────────────────────────────")
+    print(f"{'Metric':<15} {'Samples':>8} {'Mean':>10} {'Median':>10} {'p05':>10} {'p95':>10} {'Min':>10} {'Max':>10}")
     print(
-        f"{'buffer_level':<14} {buffer_stats['samples']:>8} {_fmt(buffer_stats['mean']):>10} {_fmt(buffer_stats['median']):>10} {_fmt(buffer_stats['p05']):>10} {_fmt(buffer_stats['p95']):>10} {_fmt(buffer_stats['min']):>10} {_fmt(buffer_stats['max']):>10}")
+        f"{'buffer_underrun':<15} {buffer_stats['samples']:>8} {_fmt(buffer_stats['mean']):>10} {_fmt(buffer_stats['median']):>10} {_fmt(buffer_stats['p05']):>10} {_fmt(buffer_stats['p95']):>10} {_fmt(buffer_stats['min']):>10} {_fmt(buffer_stats['max']):>10}")
     print(
-        f"{'startup_time':<14} {startup_stats['samples']:>8} {_fmt(startup_stats['mean']):>10} {_fmt(startup_stats['median']):>10} {_fmt(startup_stats['p05']):>10} {_fmt(startup_stats['p95']):>10} {_fmt(startup_stats['min']):>10} {_fmt(startup_stats['max']):>10}")
-    print("──────────────────────────────────────────────────────────────────────────────────\n")
+        f"{'startup_time':<15} {startup_stats['samples']:>8} {_fmt(startup_stats['mean']):>10} {_fmt(startup_stats['median']):>10} {_fmt(startup_stats['p05']):>10} {_fmt(startup_stats['p95']):>10} {_fmt(startup_stats['min']):>10} {_fmt(startup_stats['max']):>10}")
+    print("──────────────────────────────────────────────────────────────────────────────────────────\n")
 
 
 # ── Locust User ────────────────────────────────────────────────────────────────
 class HLSUser(FastHttpUser):
-    proxy_host = os.getenv("HTTP_PROXY_HOST")
+    # proxy support
+    proxy_host = os.getenv("HTTP_PROXY_HOST", None)
     proxy_port = int(os.getenv("HTTP_PROXY_PORT", '0')) or None
 
-    wait_time = constant(0)
+    wait_time = constant(0)  # HLSUser implements its own pacing, so we don't want Locust to add any additional wait time
 
     def on_start(self) -> None:
         if self.host is None:
-            raise ValueError("host must be set for HLSUser")
+            raise ValueError("Host must be the playlist URL (e.g. http://localhost:8000/playlist.m3u8)")
 
         self._stream = HLSSession(self.host, self.client, gevent.sleep)
 
     @task
     def stream(self):
         if not self._stream.step():
-            print(f"exit user {self._stream.userid}")
             self.stop(force=True)

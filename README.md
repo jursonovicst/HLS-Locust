@@ -13,7 +13,7 @@ Locust-based HLS load tester with player-level KPIs.
 
 - `locustfile.py`: Locust user and custom metrics reporting
 - `streaming.py`: HLS session loop (manifest polling + segment fetching)
-- `player.py`: Buffer model and underrun logic
+- `player/player.py`: Buffer model and underrun logic
 - `tools/start_hls_encoding.sh`: Starts FFmpeg and HTTP server for a local live stream
 - `tools/hls_http_server.py`: HTTP server with explicit MIME mapping for HLS
 

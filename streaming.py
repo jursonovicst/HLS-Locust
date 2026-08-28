@@ -7,7 +7,7 @@ from typing import Callable
 import m3u8
 from locust.contrib.fasthttp import FastHttpSession, FastResponse
 
-from player import ABRModel, Segment, BufferUnderrun
+from player import ABRPlayer, Segment, BufferUnderrunError
 
 
 class HLSSession:
@@ -22,7 +22,7 @@ class HLSSession:
         self._sleep = sleep
         self._userid = userid if userid else str(uuid.uuid4())
 
-        self._player = ABRModel(3)
+        self._player = None
         self._init_state()
 
     def _init_state(self) -> None:
@@ -90,7 +90,10 @@ class HLSSession:
         return response
 
     def step(self) -> bool:
-        """Advance the session by one step. Return True if the session is still active, False if it has ended."""
+        """
+        Advance the session by one step. Return True if the session is still active, False if it has ended.
+        :return: True if the session is still active, False if it has ended.
+        """
         try:
             # initialize timing
             if self._fetch_playlist_at < 0:
@@ -98,7 +101,6 @@ class HLSSession:
 
             # fetch playlist
             playlist = self._fetch_manifest()
-            assert playlist.target_duration is not None, "Playlist must have target_duration"
 
             if self._last_playlist_fingerprint == self.playlist_fingerprint(playlist):
                 # playlist has not changes, wait 0.5 target_duration
@@ -111,20 +113,23 @@ class HLSSession:
                 if self._last_playlist_fingerprint == ():
                     self._last_playlist_fingerprint = self.playlist_fingerprint(playlist)
 
-                    # first playlist, start buffering
-                    self._player.start_buffering(playlist.target_duration)
+                    # first playlist, create player
+                    if playlist.target_duration is None:
+                        raise ValueError("Playlist must have target_duration")
+                    self._player = ABRPlayer(3, playlist.target_duration)
 
-                    # fill buffer ASAP and start play
+                    # fill buffer ASAP
+                    self._player.start_buffering()
                     for media_segment in playlist.segments[-self._player.buffer_target_n:]:
                         # download segment
                         self._fetch_segment(media_segment.absolute_uri)
 
-                        self._player.add_segment(Segment(media_segment.media_sequence, media_segment.duration))
+                        self._player.buffer(Segment(media_segment.media_sequence, media_segment.duration))
                         self._last_media_sequence_seen = media_segment.media_sequence
 
                     # start play
-                    self._player.start_playing()
-                    self._session.user.environment.startup_time_event.fire(time=self._player.startup_time, userid=self.userid)
+                    startup_time = self._player.start_playing()
+                    self._session.user.environment.startup_time_event.fire(time=startup_time, userid=self.userid)
 
                 else:
                     self._last_playlist_fingerprint = self.playlist_fingerprint(playlist)
@@ -136,27 +141,28 @@ class HLSSession:
 
                     self._fetch_segment(media_segment.absolute_uri)
 
-                    self._player.add_segment(Segment(media_segment.media_sequence, media_segment.duration))
+                    self._player.buffer(Segment(media_segment.media_sequence, media_segment.duration))
                     self._last_media_sequence_seen = media_segment.media_sequence
 
             # advance player
-            self._player.advance()
-            self._session.user.environment.buffer_level_event.fire(level=self._player.buffer_level[1], userid=self.userid)
+            buffer_level_n, buffer_level_s = self._player.advance()
+            # self._session.user.environment.buffer_level_event.fire(level=self._player.buffer_level[1], userid=self.userid)
 
             # wait
             self._sleep(max(0, self._fetch_playlist_at - time.monotonic()))
 
-            logging.debug(f"{self.throughput_bps / 1000 / 1000:.2f}Mbps, {self._player.buffer_level}")
+            # logging.debug(f"{self.throughput_bps / 1000 / 1000:.2f}Mbps, buffer level: {buffer_level_n} ({buffer_level_s}s)")
             return True
 
-        except BufferUnderrun as e:
+        except BufferUnderrunError as e:
             # we simulate a use-case, where clients are constantly trying to rebuffer, so we just reset the playback state and continue
             logging.warning(f"Buffer underrun {e}: rebuffering")
-            self._session.user.environment.buffer_level_event.fire(level=-1, userid=self.userid)
+            self._session.user.environment.buffer_underrun_event.fire(level=-1, userid=self.userid)
 
             # reset playback to trigger rebuffering
             self._init_state()
-            self._player.reset()
+            del self._player
+            self._player = None
 
             # wait a bit before retrying
             self._sleep(1)
