@@ -12,7 +12,7 @@ buffer_underrun_event = EventHook()
 startup_time_event = EventHook()
 
 # In-memory store for collected samples
-_buffer_underrun_samples: list[float] = []
+_buffer_underrun_count: int = 0
 _startup_time_samples: list[float] = []
 
 
@@ -48,9 +48,10 @@ def _fmt(value: float | None) -> str:
     return "-" if value is None else f"{value:.3f}s"
 
 
-def _on_buffer_underrun(level: float, userid: str) -> None:
+def _on_buffer_underrun(userid: str) -> None:
     """Listener: store every buffer underrun sample."""
-    _buffer_underrun_samples.append(level)
+    global _buffer_underrun_count
+    _buffer_underrun_count += 1
 
 
 def _on_startup_time(time: float, userid: str) -> None:
@@ -71,7 +72,7 @@ def on_locust_init(environment, **kwargs):
 @events.test_stop.add_listener
 def on_test_stop(environment, **kwargs):
     """Print metric matrix for buffer underrun and startup time when the test ends."""
-    buffer_stats = _calc_stats(_buffer_underrun_samples)
+    buffer_stats = _calc_stats([1] * _buffer_underrun_count)
     startup_stats = _calc_stats(_startup_time_samples)
 
     if buffer_stats["samples"] == 0 and startup_stats["samples"] == 0:
@@ -99,7 +100,11 @@ class HLSUser(FastHttpUser):
         if self.host is None:
             raise ValueError("Host must be the playlist URL (e.g. http://localhost:8000/playlist.m3u8)")
 
-        self._stream = HLSSession(self.host, self.client, gevent.sleep)
+        self._stream = HLSSession(self.host,
+                                  self.client,
+                                  gevent.sleep,
+                                  (self.environment.buffer_underrun_event, self.environment.startup_time_event)
+                                  )
 
     @task
     def stream(self):

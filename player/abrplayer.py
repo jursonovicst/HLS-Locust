@@ -88,7 +88,7 @@ class ABRPlayer:
         # if play is ahead of the buffer, we have a buffer underrun
         play_at = self._clock()
         if play_at > self._buffer_at:
-            raise BufferUnderrunError(play_at, f"Buffer underrun")
+            raise BufferUnderrunError(self._buffer_at, f"Buffer underrun at {self._buffer_at:.2f}s, play at {play_at:.2f}s")
 
         return self._buffer_at - play_at
 

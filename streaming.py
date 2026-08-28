@@ -6,6 +6,7 @@ from typing import Callable, Optional
 
 import m3u8
 from locust.contrib.fasthttp import FastHttpSession, LocustBadStatusCode
+from locust.event import EventHook
 
 from player import ABRPlayer, Segment, BufferUnderrunError
 
@@ -14,12 +15,14 @@ class HLSSession:
     def __init__(self,
                  playlist: str,
                  session: FastHttpSession,
-                 sleep: Callable[[float], None],
-                 userid: str = None,
+                 sleep: Callable[[float | int], None],
+                 events: tuple[EventHook, EventHook],
+                 userid: Optional[str] = None,
                  ) -> None:
         self._playlist = playlist
         self._session = session
         self._sleep = sleep
+        self._buffer_underrun_event, self._startup_time_event = events
         self._userid = userid if userid else str(uuid.uuid4())
 
         self._player = None
@@ -129,7 +132,7 @@ class HLSSession:
 
                     # start play
                     startup_time = self._player.start_playing()
-                    self._session.user.environment.startup_time_event.fire(time=startup_time, userid=self.userid)
+                    self._startup_time_event.fire(time=startup_time, userid=self.userid)
 
                 else:
                     # update fingerprint
@@ -171,8 +174,8 @@ class HLSSession:
 
         except BufferUnderrunError as e:
             # we simulate a use-case, where clients are constantly trying to rebuffer, so we just reset the playback state and continue
-            logging.warning(f"Buffer underrun {e}: rebuffering")
-            self._session.user.environment.buffer_underrun_event.fire(level=-1, userid=self.userid)
+            logging.warning(f"{e}: rebuffering")
+            self._buffer_underrun_event.fire(userid=self.userid)
 
             # reset playback to trigger rebuffering
             self._init_state()
