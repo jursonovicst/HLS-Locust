@@ -2,10 +2,10 @@ import logging
 import time
 import uuid
 from collections import deque
-from typing import Callable
+from typing import Callable, Optional
 
 import m3u8
-from locust.contrib.fasthttp import FastHttpSession, FastResponse
+from locust.contrib.fasthttp import FastHttpSession, LocustBadStatusCode
 
 from player import ABRPlayer, Segment, BufferUnderrunError
 
@@ -28,8 +28,8 @@ class HLSSession:
     def _init_state(self) -> None:
         """Initialize mutable playback state"""
         self._last_playlist_fingerprint = ()
-        self._fetch_playlist_at: float = -1
-        self._last_media_sequence_seen: int = -1
+        self._fetch_playlist_at: Optional[float] = None
+        self._last_media_sequence_seen: Optional[int] = None
         self._throughput_samples = deque(maxlen=3)
 
     @classmethod
@@ -79,7 +79,7 @@ class HLSSession:
         else:
             return playlist
 
-    def _fetch_segment(self, uri: str, name="segment") -> FastResponse:
+    def _fetch_segment(self, uri: str, name="segment") -> None:
         t0 = time.perf_counter()
         response = self._session.get(uri, name=name)
         response.raise_for_status()
@@ -87,7 +87,6 @@ class HLSSession:
         elapsed_s = max(time.perf_counter() - t0, 1e-6)
         size_bytes = len(response.content or b"")
         self._throughput_samples.append((size_bytes * 8) / elapsed_s)
-        return response
 
     def step(self) -> bool:
         """
@@ -96,7 +95,7 @@ class HLSSession:
         """
         try:
             # initialize timing
-            if self._fetch_playlist_at < 0:
+            if self._fetch_playlist_at is None:
                 self._fetch_playlist_at = time.monotonic()
 
             # fetch playlist
@@ -111,17 +110,18 @@ class HLSSession:
                 self._fetch_playlist_at += playlist.target_duration
 
                 if self._last_playlist_fingerprint == ():
+                    # init fingerprint
                     self._last_playlist_fingerprint = self.playlist_fingerprint(playlist)
 
                     # first playlist, create player
                     if playlist.target_duration is None:
                         raise ValueError("Playlist must have target_duration")
-                    self._player = ABRPlayer(3, playlist.target_duration)
+                    self._player = ABRPlayer(playlist.target_duration)
 
                     # fill buffer ASAP
                     self._player.start_buffering()
-                    for media_segment in playlist.segments[-self._player.buffer_target_n:]:
-                        # download segment
+                    for media_segment in playlist.segments[-3:]:  # TODO: clarify buffer target (3)
+                        # download segment (no retry during buffering)
                         self._fetch_segment(media_segment.absolute_uri)
 
                         self._player.buffer(Segment(media_segment.media_sequence, media_segment.duration))
@@ -132,26 +132,41 @@ class HLSSession:
                     self._session.user.environment.startup_time_event.fire(time=startup_time, userid=self.userid)
 
                 else:
+                    # update fingerprint
                     self._last_playlist_fingerprint = self.playlist_fingerprint(playlist)
 
                     # changed playlist, get next segment after the last seen one
+                    assert self._last_media_sequence_seen is not None, "last_media_sequence_seen must be set after first playlist"
                     media_segment = next((s for s in playlist.segments if s.media_sequence > self._last_media_sequence_seen), None)
                     if media_segment is None:
                         raise Exception(f"manifest changed, but no new segment seen?!")
 
-                    self._fetch_segment(media_segment.absolute_uri)
+                    # fetch segment with retry
+                    wait = 0.100
+                    while True:
+                        try:
+                            buffer_level = self._player.advance()
+                            self._fetch_segment(media_segment.absolute_uri + "uuu")
+                            break
+                        except LocustBadStatusCode as e:
+                            if e.code < 500 and e.code != 404:
+                                # client error (except fragment not yet published), give up
+                                raise
 
+                            # server error, retry with exponential backoff
+                            self._sleep(wait)
+                            wait = min(wait * 2, buffer_level)  # no point to wait more than buffer level, because we will underrun anyway
+
+                    # buffer segment
                     self._player.buffer(Segment(media_segment.media_sequence, media_segment.duration))
                     self._last_media_sequence_seen = media_segment.media_sequence
 
             # advance player
-            buffer_level_n, buffer_level_s = self._player.advance()
-            # self._session.user.environment.buffer_level_event.fire(level=self._player.buffer_level[1], userid=self.userid)
+            self._player.advance()
 
             # wait
             self._sleep(max(0, self._fetch_playlist_at - time.monotonic()))
 
-            # logging.debug(f"{self.throughput_bps / 1000 / 1000:.2f}Mbps, buffer level: {buffer_level_n} ({buffer_level_s}s)")
             return True
 
         except BufferUnderrunError as e:
