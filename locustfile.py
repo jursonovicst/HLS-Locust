@@ -45,14 +45,14 @@ def _fmt(value: float | None) -> str:
 
 
 @HLSSession.listen(HLSSession.buffer_underrun_event)
-def _on_buffer_underrun(userid: str, wall_clock: float) -> None:
+def _on_buffer_underrun(environment, userid: str, wall_clock: float) -> None:
     """Listener: store every buffer underrun sample."""
     global _buffer_underrun_count
     _buffer_underrun_count += 1
 
 
 @HLSSession.listen(HLSSession.startup_time_event)
-def _on_startup_time(time: float, userid: str, wall_clock: float) -> None:
+def _on_startup_time(environment, time: float, userid: str, wall_clock: float) -> None:
     """Listener: store every startup time sample."""
     _startup_time_samples.append(time)
 
@@ -88,7 +88,7 @@ class HLSUser(FastHttpUser):
         if self.host is None:
             raise ValueError("Host must be the playlist URL (e.g. http://localhost:8000/playlist.m3u8)")
 
-        self._stream = HLSSession(self.host, self.client, gevent.sleep)
+        self._stream = HLSSession(self.host, self.client, self.environment, gevent.sleep)
 
     @task
     def stream(self):
