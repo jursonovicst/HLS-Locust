@@ -131,8 +131,8 @@ class HLSSession:
                         self._last_media_sequence_seen = media_segment.media_sequence
 
                     # start play
-                    startup_time = self._player.start_playing()
-                    self._startup_time_event.fire(time=startup_time, userid=self.userid)
+                    startup_time, startup_time_wall_clock = self._player.start_playing()
+                    self._startup_time_event.fire(time=startup_time, userid=self.userid, wall_clock=startup_time_wall_clock)
 
                 else:
                     # update fingerprint
@@ -175,7 +175,7 @@ class HLSSession:
         except BufferUnderrunError as e:
             # we simulate a use-case, where clients are constantly trying to rebuffer, so we just reset the playback state and continue
             logging.warning(f"{e}: rebuffering")
-            self._buffer_underrun_event.fire(userid=self.userid)
+            self._buffer_underrun_event.fire(userid=self.userid, wall_clock=e.at_wall_clock)
 
             # reset playback to trigger rebuffering
             self._init_state()

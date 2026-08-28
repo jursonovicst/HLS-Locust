@@ -48,13 +48,13 @@ def _fmt(value: float | None) -> str:
     return "-" if value is None else f"{value:.3f}s"
 
 
-def _on_buffer_underrun(userid: str) -> None:
+def _on_buffer_underrun(userid: str, wall_clock: float) -> None:
     """Listener: store every buffer underrun sample."""
     global _buffer_underrun_count
     _buffer_underrun_count += 1
 
 
-def _on_startup_time(time: float, userid: str) -> None:
+def _on_startup_time(time: float, userid: str, wall_clock: float) -> None:
     """Listener: store every startup time sample."""
     _startup_time_samples.append(time)
 

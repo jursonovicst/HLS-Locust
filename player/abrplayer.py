@@ -1,6 +1,6 @@
 import time
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Optional, Callable, Tuple
 
 from .errors import BufferUnderrunError
 
@@ -32,6 +32,7 @@ class ABRPlayer:
 
         self._start_buffering_at: Optional[float] = None  # time when buffering began; None means not started
         self._start_play_at: Optional[float] = None  # time when playback began; None means not started
+        self._start_play_at_wall_clock: Optional[float] = None  # time when playback began (wall clock) Used to convert at time to wall clock time
         self._buffer_at: float = 0.0  # time when the playback will fail, because the segments in the buffer cannot cover playback; None means not started
         self._next_fetch_at: Optional[float] = None  # scheduled time for next fetch; None if none
 
@@ -53,17 +54,18 @@ class ABRPlayer:
     def is_buffering(self) -> bool:
         return self._start_buffering_at is not None and self._start_play_at is None
 
-    def start_playing(self) -> float:
+    def start_playing(self) -> Tuple[float, float]:
         """
         Start playing the buffered segments. Use the buffer() and advance() methods to manage the buffer and play.
-        :return: The time it took to start playback.
+        :return: The time it took to start playback and time wall clock time it happened.
         """
         assert self._start_buffering_at is not None, "Player must be buffering to start playing"
 
         self._start_play_at = self._clock()
+        self._start_play_at_wall_clock = time.time()  # Record the wall clock time
         self._buffer_at += self._start_play_at  # convert the buffered duration to an absolute monotonic time
 
-        return self._start_play_at - self._start_buffering_at
+        return self._start_play_at - self._start_buffering_at, self._start_play_at_wall_clock
 
     @property
     def is_playing(self) -> bool:
@@ -88,7 +90,8 @@ class ABRPlayer:
         # if play is ahead of the buffer, we have a buffer underrun
         play_at = self._clock()
         if play_at > self._buffer_at:
-            raise BufferUnderrunError(self._buffer_at, f"Buffer underrun at {self._buffer_at:.2f}s, play at {play_at:.2f}s")
+            # convert the buffered duration to an absolute wall clock time for the error
+            raise BufferUnderrunError(self._start_play_at_wall_clock + self._buffer_at - self._start_play_at, f"Buffer underrun at {self._buffer_at:.2f}s, play at {play_at:.2f}s")
 
         return self._buffer_at - play_at
 
