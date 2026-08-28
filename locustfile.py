@@ -4,12 +4,8 @@ import statistics
 import gevent
 from locust import FastHttpUser, constant, task
 from locust import events
-from locust.event import EventHook
 
 from streaming import HLSSession
-
-buffer_underrun_event = EventHook()
-startup_time_event = EventHook()
 
 # In-memory store for collected samples
 _buffer_underrun_count: int = 0
@@ -48,25 +44,17 @@ def _fmt(value: float | None) -> str:
     return "-" if value is None else f"{value:.3f}s"
 
 
+@HLSSession.listen(HLSSession.buffer_underrun_event)
 def _on_buffer_underrun(userid: str, wall_clock: float) -> None:
     """Listener: store every buffer underrun sample."""
     global _buffer_underrun_count
     _buffer_underrun_count += 1
 
 
+@HLSSession.listen(HLSSession.startup_time_event)
 def _on_startup_time(time: float, userid: str, wall_clock: float) -> None:
     """Listener: store every startup time sample."""
     _startup_time_samples.append(time)
-
-
-buffer_underrun_event.add_listener(_on_buffer_underrun)
-startup_time_event.add_listener(_on_startup_time)
-
-
-@events.init.add_listener
-def on_locust_init(environment, **kwargs):
-    environment.buffer_underrun_event = buffer_underrun_event
-    environment.startup_time_event = startup_time_event
 
 
 @events.test_stop.add_listener
@@ -100,11 +88,7 @@ class HLSUser(FastHttpUser):
         if self.host is None:
             raise ValueError("Host must be the playlist URL (e.g. http://localhost:8000/playlist.m3u8)")
 
-        self._stream = HLSSession(self.host,
-                                  self.client,
-                                  gevent.sleep,
-                                  (self.environment.buffer_underrun_event, self.environment.startup_time_event)
-                                  )
+        self._stream = HLSSession(self.host, self.client, gevent.sleep)
 
     @task
     def stream(self):
