@@ -146,7 +146,7 @@ class HLSSession:
                     while True:
                         try:
                             buffer_level = self._player.advance()
-                            self._fetch_segment(media_segment.absolute_uri + "uuu")
+                            self._fetch_segment(media_segment.absolute_uri)
                             break
                         except LocustBadStatusCode as e:
                             if e.code < 500 and e.code != 404:
