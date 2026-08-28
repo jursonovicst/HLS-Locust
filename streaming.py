@@ -12,17 +12,26 @@ from player import ABRPlayer, Segment, BufferUnderrunError
 
 
 class HLSSession:
+    buffer_underrun_event = EventHook()
+    startup_time_event = EventHook()
+
+    @classmethod
+    def listen(cls, event: EventHook):
+        def deco(fn):
+            event.add_listener(fn)
+            return fn
+
+        return deco
+
     def __init__(self,
                  playlist: str,
                  session: FastHttpSession,
                  sleep: Callable[[float | int], None],
-                 events: tuple[EventHook, EventHook],
                  userid: Optional[str] = None,
                  ) -> None:
         self._playlist = playlist
         self._session = session
         self._sleep = sleep
-        self._buffer_underrun_event, self._startup_time_event = events
         self._userid = userid if userid else str(uuid.uuid4())
 
         self._player = None
@@ -132,7 +141,7 @@ class HLSSession:
 
                     # start play
                     startup_time, startup_time_wall_clock = self._player.start_playing()
-                    self._startup_time_event.fire(time=startup_time, userid=self.userid, wall_clock=startup_time_wall_clock)
+                    self.startup_time_event.fire(time=startup_time, userid=self.userid, wall_clock=startup_time_wall_clock)
 
                 else:
                     # update fingerprint
@@ -175,7 +184,7 @@ class HLSSession:
         except BufferUnderrunError as e:
             # we simulate a use-case, where clients are constantly trying to rebuffer, so we just reset the playback state and continue
             logging.warning(f"{e}: rebuffering")
-            self._buffer_underrun_event.fire(userid=self.userid, wall_clock=e.at_wall_clock)
+            self.buffer_underrun_event.fire(userid=self.userid, wall_clock=e.at_wall_clock)
 
             # reset playback to trigger rebuffering
             self._init_state()
