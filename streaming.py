@@ -43,21 +43,10 @@ class HLSSession:
 
     def _init_state(self) -> None:
         """Initialize mutable playback state"""
-        self._last_playlist_fingerprint = ()
         self._fetch_playlist_at: Optional[float] = None
         self._last_media_sequence_seen: Optional[
             int] = None  # make it negative to let always capture the first segment whatever its media_sequence is
         self._throughput_samples = deque(maxlen=3)
-
-    @classmethod
-    def playlist_fingerprint(cls, playlist: m3u8.M3U8) -> tuple:
-        last = playlist.segments[-1]
-        return (
-            playlist.media_sequence,
-            len(playlist.segments),
-            last.uri or last.absolute_uri,
-            float(last.duration or 0)
-        )
 
     @property
     def userid(self) -> str:
