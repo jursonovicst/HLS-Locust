@@ -19,20 +19,17 @@ class ABRPlayer:
     behavior of a real player.
     """
 
-    def __init__(self, target_duration: float, clock: Callable[[None], float] | None = None) -> None:
+    def __init__(self, clock: Callable[[None], float] | None = None) -> None:
         """
         Initialize the ABRModel.
-        :param target_duration: The target duration for buffering.
         :param clock: A callable that returns the current time in seconds. If None, time.monotonic will be used.
         """
-        if target_duration <= 0:
-            raise ValueError("target_duration must be > 0")
-        self._target_duration = target_duration
         self._clock = clock if clock is not None else time.monotonic
 
         self._start_buffering_at: Optional[float] = None  # time when buffering began; None means not started
         self._start_play_at: Optional[float] = None  # time when playback began; None means not started
-        self._start_play_at_wall_clock: Optional[float] = None  # time when playback began (wall clock) Used to convert at time to wall clock time
+        self._start_play_at_wall_clock: Optional[
+            float] = None  # time when playback began (wall clock) Used to convert at time to wall clock time
         self._buffer_at: float = 0.0  # time when the playback will fail, because the segments in the buffer cannot cover playback; None means not started
         self._next_fetch_at: Optional[float] = None  # scheduled time for next fetch; None if none
 
@@ -48,6 +45,7 @@ class ABRPlayer:
         Start buffering with the specified target duration.
         :return: None
         """
+        assert self._start_buffering_at is None, "Player must be initializing to start buffering"
         self._start_buffering_at = self._clock()
 
     @property
@@ -57,9 +55,9 @@ class ABRPlayer:
     def start_playing(self) -> Tuple[float, float]:
         """
         Start playing the buffered segments. Use the buffer() and advance() methods to manage the buffer and play.
-        :return: The time it took to start playback and time wall clock time it happened.
+        :return: The duration it took to start playback and time wall clock time it happened.
         """
-        assert self._start_buffering_at is not None, "Player must be buffering to start playing"
+        assert self._start_buffering_at is not None and self._start_play_at is None, "Player must be buffering to start playing"
 
         self._start_play_at = self._clock()
         self._start_play_at_wall_clock = time.time()  # Record the wall clock time
@@ -83,7 +81,7 @@ class ABRPlayer:
     def advance(self) -> float:
         """
         Player control logic.
-        :return: The duration of buffered media in seconds.
+        :return: The current duration of buffered media in seconds.
         """
         assert self._start_play_at is not None, "Player must be playing to advance."
 
@@ -91,7 +89,8 @@ class ABRPlayer:
         play_at = self._clock()
         if play_at > self._buffer_at:
             # convert the buffered duration to an absolute wall clock time for the error
-            raise BufferUnderrunError(self._start_play_at_wall_clock + self._buffer_at - self._start_play_at, f"Buffer underrun at {self._buffer_at:.2f}s, play at {play_at:.2f}s")
+            raise BufferUnderrunError(self._start_play_at_wall_clock + self._buffer_at - self._start_play_at,
+                                      f"Buffer underrun at {self._buffer_at:.2f}s, play at {play_at:.2f}s")
 
         return self._buffer_at - play_at
 
