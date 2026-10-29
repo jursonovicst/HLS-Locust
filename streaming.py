@@ -5,6 +5,7 @@ from collections import deque
 from typing import Callable, Optional
 
 import m3u8
+from geventhttpclient.useragent import RetriesExceeded
 from locust.contrib.fasthttp import FastHttpSession, LocustBadStatusCode
 from locust.env import Environment
 from locust.event import EventHook
@@ -200,7 +201,7 @@ class HLSSession:
             self.player_error_event.fire(userid=self.user_id, time=e.time_wc, exception=e)
         except ManifestError as e:
             self.manifest_error_event.fire(userid=self.user_id, time=time.time(), exception=e)
-        except (CatchResponseError, LocustBadStatusCode) as e:
+        except (CatchResponseError, LocustBadStatusCode, RetriesExceeded) as e:
             self.http_error_event.fire(userid=self.user_id, time=time.time(), exception=e)
 
         # we simulate a use-case, where clients are constantly trying to rebuffer, so we just reset the playback state and continue
