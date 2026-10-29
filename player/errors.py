@@ -1,14 +1,11 @@
-from abc import ABC
-
-
-class PlayerError(Exception, ABC):
-    def __init__(self, at_wall_clock: float, *args: object):
+class PlayerError(Exception):
+    def __init__(self, *args: object, time_wc: float):
         super().__init__(*args)
-        self._at_wall_clock = at_wall_clock
+        self._time_wc = time_wc
 
     @property
-    def at_wall_clock(self) -> float:
-        return self._at_wall_clock
+    def time_wc(self) -> float:
+        return self._time_wc
 
 
 class BufferUnderrunError(PlayerError):

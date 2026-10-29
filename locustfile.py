@@ -5,13 +5,26 @@ import gevent
 from locust import FastHttpUser, constant, task
 from locust.exception import StopUser
 
+from player import PlayerError
 from streaming import HLSSession
 
 
-@HLSSession.listen(HLSSession.buffer_underrun_event)
-def _on_buffer_underrun(environment, userid: str, time: float) -> None:
-    """Listener: store every buffer underrun sample."""
-    logging.warning(f"Buffer underrun for user {userid} at {time:.3f}s")
+@HLSSession.listen(HLSSession.player_error_event)
+def _on_player_error(userid: str, time: float, e: PlayerError) -> None:
+    """Listener: store every player error sample."""
+    logging.warning(f"{e} for user {userid} at {time:.3f}s")
+
+
+@HLSSession.listen(HLSSession.manifest_error_event)
+def _on_manifest_error(userid: str, time: float, e: Exception) -> None:
+    """Listener: store every manifest error sample."""
+    logging.warning(f"{e} for user {userid} at {time:.3f}s")
+
+
+@HLSSession.listen(HLSSession.http_error_event)
+def _on_http_error(userid: str, time: float, e: Exception) -> None:
+    """Listener: store every HTTP error sample."""
+    logging.warning(f"{e} for user {userid} at {time:.3f}s")
 
 
 @HLSSession.listen(HLSSession.startup_time_event)
