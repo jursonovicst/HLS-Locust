@@ -8,13 +8,21 @@ import m3u8
 from locust.contrib.fasthttp import FastHttpSession, LocustBadStatusCode
 from locust.env import Environment
 from locust.event import EventHook
+from locust.exception import CatchResponseError
 
-from player import ABRPlayer, Segment, BufferUnderrunError
+from player import ABRPlayer, Segment, PlayerError
+
+
+class ManifestError(ValueError):
+    pass
 
 
 class HLSSession:
-    buffer_underrun_event = EventHook()
     startup_time_event = EventHook()
+
+    player_error_event = EventHook()
+    manifest_error_event = EventHook()
+    http_error_event = EventHook()
 
     @classmethod
     def listen(cls, event: EventHook):
@@ -30,28 +38,28 @@ class HLSSession:
                  session: FastHttpSession,
                  environment: Environment,
                  sleep: Callable[[float | int], object],
-                 userid: Optional[str] = None,
+                 user_id: Optional[str] = None,
                  ) -> None:
         self._playlist_url = playlist_url
         self._profile_selector = profile_selector
         self._session = session
         self._sleep = sleep
         self._environment = environment
-        self._userid = userid if userid else str(uuid.uuid4())
+        self._user_id = user_id or uuid.uuid4().hex
 
         self._player = None
-        self._master_playlist = None
         self._init_state()
 
     def _init_state(self) -> None:
         """Initialize mutable playback state"""
+        self._master_playlist: Optional[m3u8.M3U8] = None
         self._fetch_playlist_at: Optional[float] = None
         self._last_media_sequence_seen: Optional[int] = None  # make it negative to let always capture the first segment whatever its media_sequence is
         self._throughput_samples = deque(maxlen=3)
 
     @property
-    def userid(self) -> str:
-        return self._userid
+    def user_id(self) -> str:
+        return self._user_id
 
     @property
     def throughput_bps(self) -> float:
@@ -64,17 +72,26 @@ class HLSSession:
         Fetch a manifest and parse it as M3U8. An invalid manifest will increase the failure count of the request.
         """
         with self._session.get(url, catch_response=True, name="manifest") as response:
-            if not response.ok:
-                response.failure(f"Failed to fetch playlist: {response.status_code}")
-                response.raise_for_status()
-
+            response.raise_for_status()
             try:
-                playlist = m3u8.loads(response.text, uri=url)
-                response.success()
+                content = response.text
+
+                if not content.lstrip("\ufeff").startswith("#EXTM3U"):
+                    raise ManifestError("Missing #EXTM3U header")
+
+                playlist = m3u8.loads(content, uri=url)
+
+                if not playlist.is_variant:
+                    if not playlist.segments:
+                        raise ManifestError("Empty media playlist")
+
+                    if not playlist.target_duration or playlist.target_duration <= 0:
+                        raise ManifestError("Invalid target duration")
+
                 return playlist
-            except ValueError as e:
-                response.failure(e)
-                raise Exception(e)
+            except ManifestError as e:
+                response.failure(f"Invalid manifest: {e}")
+                raise
 
     def _fetch_segment(self, uri: str, name="segment") -> None:
         ts_start = time.perf_counter()
@@ -125,19 +142,19 @@ class HLSSession:
 
                 # start play
                 startup_duration, startup_time_wall_clock = self._player.start_playing()
-                self.startup_time_event.fire(environment=self._environment, duration=startup_duration, userid=self.userid, time=startup_time_wall_clock)
+                self.startup_time_event.fire(environment=self._environment, duration=startup_duration, userid=self.user_id, time=startup_time_wall_clock)
             else:
                 # identify next segment (according to rfc8216 6.3.5)
                 while (media_segment := next(
                         (s for s in playlist.segments if s.media_sequence > self._last_media_sequence_seen),
                         None)) is None:
                     if playlist.is_endlist:
-                        logging.info(f"End of playlist reached for user {self.userid}, stopping session")
+                        logging.info(f"End of playlist reached for user {self.user_id}, stopping session")
                         return False
 
                     # stale playlist, add back pressure my moving the manifest fetch in the middle of the target duration, so that we don't hammer the server with requests
                     self._fetch_playlist_at += playlist.target_duration / 2
-                    logging.warning(f"Stale playlist for user {self.userid}, retrying in {playlist.target_duration / 2} seconds...")
+                    logging.warning(f"Stale playlist for user {self.user_id}, retrying in {playlist.target_duration / 2} seconds...")
 
                     # retry
                     self._sleep(playlist.target_duration / 2)
@@ -179,18 +196,19 @@ class HLSSession:
 
             return True
 
-        except (BufferUnderrunError) as e:  # , CatchResponseError
-            # we simulate a use-case, where clients are constantly trying to rebuffer, so we just reset the playback state and continue
-            if isinstance(e, BufferUnderrunError):
-                self.buffer_underrun_event.fire(environment=self._environment, userid=self.userid, time=e.at_wall_clock)
+        except PlayerError as e:
+            self.player_error_event.fire(userid=self.user_id, time=e.time_wc, exception=e)
+        except ManifestError as e:
+            self.manifest_error_event.fire(userid=self.user_id, time=time.time(), exception=e)
+        except (CatchResponseError, LocustBadStatusCode) as e:
+            self.http_error_event.fire(userid=self.user_id, time=time.time(), exception=e)
 
-            # reset playback to trigger rebuffering
-            self._init_state()
-            self._player = None
+        # we simulate a use-case, where clients are constantly trying to rebuffer, so we just reset the playback state and continue
 
-            # wait a bit before retrying
-            self._sleep(1)
-            return True
-        except Exception as e:
-            logging.exception(f"Error in HLS session for user {self.userid}: {e}")
-            return False
+        # reset playback to trigger rebuffering
+        self._init_state()
+        self._player = None
+
+        # wait a bit before retrying
+        self._sleep(1)
+        return True

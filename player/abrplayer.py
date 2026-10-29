@@ -22,52 +22,63 @@ class ABRPlayer:
     def __init__(self, clock: Callable[[None], float] | None = None) -> None:
         """
         Initialize the ABRModel.
+        :param player_id: A unique identifier for the client. This is used to distinguish between different clients in the simulation.
         :param clock: A callable that returns the current time in seconds. If None, time.monotonic will be used.
-        """
-        self._clock = clock if clock is not None else time.monotonic
 
-        self._start_buffering_at: Optional[float] = None  # time when buffering began; None means not started
-        self._start_play_at: Optional[float] = None  # time when playback began; None means not started
-        self._start_play_at_wall_clock: Optional[
-            float] = None  # time when playback began (wall clock) Used to convert at time to wall clock time
-        self._buffer_at: float = 0.0  # time when the playback will fail, because the segments in the buffer cannot cover playback; None means not started
-        self._next_fetch_at: Optional[float] = None  # scheduled time for next fetch; None if none
+        Player state model is: initializing -> buffering -> playing. The player can be in one of these states at any given time.
+
+            bs | ps
+        ini N    N
+        buf Y    N
+        pla Y    Y
+
+        """
+        self._clock_ts = clock if clock is not None else time.monotonic
+
+        self._buffering_started_ts: Optional[float] = None  # time when buffering began; None means not started
+        self._play_started_ts: Optional[float] = None  # time when playback began; None means not started
+        self._play_started_wc: Optional[float] = None  # time when playback began (wall clock) Used to convert at time to wall clock time
+        self._buffer_end_ts: float = 0.0  # time when the playback will fail, because the segments in the buffer cannot cover playback; None means not started
+        self._next_fetch_ts: Optional[float] = None  # scheduled time for next fetch; None if none
 
     @property
     def is_initializing(self) -> bool:
         """
         :return: True if the player is initializing, False otherwise.
         """
-        return self._start_buffering_at is None
+        return self._buffering_started_ts is None
 
     def start_buffering(self) -> None:
         """
         Start buffering with the specified target duration.
         :return: None
         """
-        assert self._start_buffering_at is None, "Player must be initializing to start buffering"
-        self._start_buffering_at = self._clock()
+        assert self.is_initializing, "Player must be initializing to start buffering"
+        self._buffering_started_ts = self._clock_ts()
 
     @property
     def is_buffering(self) -> bool:
-        return self._start_buffering_at is not None and self._start_play_at is None
+        return self._buffering_started_ts is not None and self._play_started_ts is None
 
     def start_playing(self) -> Tuple[float, float]:
         """
         Start playing the buffered segments. Use the buffer() and advance() methods to manage the buffer and play.
         :return: The duration it took to start playback and time wall clock time it happened.
         """
-        assert self._start_buffering_at is not None and self._start_play_at is None, "Player must be buffering to start playing"
+        assert self.is_buffering, "Player must be buffering to start playing"
 
-        self._start_play_at = self._clock()
-        self._start_play_at_wall_clock = time.time()  # Record the wall clock time
-        self._buffer_at += self._start_play_at  # convert the buffered duration to an absolute monotonic time
+        self._play_started_ts = self._clock_ts()
+        self._play_started_wc = time.time()  # Record the wall clock time
+        self._buffer_end_ts += self._play_started_ts  # convert the buffered duration to an absolute monotonic time
 
-        return self._start_play_at - self._start_buffering_at, self._start_play_at_wall_clock
+        return self._play_started_ts - self._buffering_started_ts, self._play_started_wc
 
     @property
     def is_playing(self) -> bool:
-        return self._start_play_at is not None
+        """
+        :return: True if the player is playing, False otherwise.
+        """
+        return self._play_started_ts is not None
 
     def buffer(self, segment: Segment) -> None:
         """
@@ -75,30 +86,39 @@ class ABRPlayer:
         :param segment: The segment to add.
         :return: None
         """
-        # accumulate buffered duration; start_playing will convert this to an absolute monotonic time
-        self._buffer_at += segment.duration
+        assert self.is_buffering or self.is_playing, "Player must be buffering or playing to buffer."
 
-    def advance(self) -> float:
+        # accumulate buffered duration; start_playing will convert this to an absolute monotonic time
+        self._buffer_end_ts += segment.duration
+
+    def _ts_to_wc(self, ts: float) -> float:
+        """
+        Convert a monotonic timestamp to a wall clock timestamp.
+        :param ts: The monotonic timestamp to convert.
+        :return: The wall clock timestamp.
+        """
+        assert self._play_started_ts is not None and self._play_started_wc is not None, "Player must be playing to convert timestamps."
+        return self._play_started_wc + ts - self._play_started_ts
+
+    def advance(self) -> None:
         """
         Player control logic.
         :return: The current duration of buffered media in seconds.
         """
-        assert self._start_play_at is not None, "Player must be playing to advance."
+        assert self.is_playing, "Player must be playing to advance."
 
         # if play is ahead of the buffer, we have a buffer underrun
-        play_at = self._clock()
-        if play_at > self._buffer_at:
+        play_at = self._clock_ts()
+        if play_at > self._buffer_end_ts:
             # convert the buffered duration to an absolute wall clock time for the error
-            raise BufferUnderrunError(self._start_play_at_wall_clock + self._buffer_at - self._start_play_at,
-                                      f"Buffer underrun at {self._buffer_at:.2f}s, play at {play_at:.2f}s")
-
-        return self._buffer_at - play_at
+            raise BufferUnderrunError(f"Buffer underrun, played {self._play_started_ts - self._buffer_end_ts:.2f}s", time_wc=self._ts_to_wc(self._buffer_end_ts))
 
     @property
     def buffer_level(self) -> float | None:
         """
         :return: The duration of buffered media in seconds, or None if it is empty.
         """
-        assert self._start_play_at is not None, "Player must be playing"
-        level = self._buffer_at - self._clock()
+        assert self.is_playing, "Player must be playing"
+
+        level = self._buffer_end_ts - self._clock_ts()
         return level if level > 0 else None

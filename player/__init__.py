@@ -1,2 +1,2 @@
 from .abrplayer import ABRPlayer, Segment
-from .errors import BufferUnderrunError
+from .errors import PlayerError, BufferUnderrunError
