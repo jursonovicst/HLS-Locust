@@ -1,79 +1,23 @@
+import logging
 import os
-import statistics
 
 import gevent
 from locust import FastHttpUser, constant, task
-from locust import events
+from locust.exception import StopUser
 
 from streaming import HLSSession
-
-# In-memory store for collected samples
-_buffer_underrun_count: int = 0
-_startup_time_samples: list[float] = []
-
-
-def _calc_stats(samples: list[float]) -> dict:
-    """Return common summary stats with safe handling for empty input."""
-    if not samples:
-        return {
-            "samples": 0,
-            "mean": None,
-            "median": None,
-            "p05": None,
-            "p95": None,
-            "min": None,
-            "max": None,
-        }
-
-    s = sorted(samples)
-    n = len(s)
-    p05_idx = min(n - 1, max(0, int((n - 1) * 0.05)))
-    p95_idx = min(n - 1, max(0, int((n - 1) * 0.95)))
-    return {
-        "samples": n,
-        "mean": statistics.mean(s),
-        "median": statistics.median(s),
-        "p05": s[p05_idx],
-        "p95": s[p95_idx],
-        "min": s[0],
-        "max": s[-1],
-    }
-
-
-def _fmt(value: float | None) -> str:
-    return "-" if value is None else f"{value:.3f}s"
 
 
 @HLSSession.listen(HLSSession.buffer_underrun_event)
 def _on_buffer_underrun(environment, userid: str, time: float) -> None:
     """Listener: store every buffer underrun sample."""
-    global _buffer_underrun_count
-    _buffer_underrun_count += 1
+    logging.warning(f"Buffer underrun for user {userid} at {time:.3f}s")
 
 
 @HLSSession.listen(HLSSession.startup_time_event)
 def _on_startup_time(environment, duration: float, userid: str, time: float) -> None:
     """Listener: store every startup time sample."""
-    _startup_time_samples.append(duration)
-
-
-@events.test_stop.add_listener
-def on_test_stop(environment, **kwargs):
-    """Print metric matrix for buffer underrun and startup time when the test ends."""
-    buffer_stats = _calc_stats([1] * _buffer_underrun_count)
-    startup_stats = _calc_stats(_startup_time_samples)
-
-    if buffer_stats["samples"] == 0 and startup_stats["samples"] == 0:
-        print("[custom-metrics] No samples collected.")
-        return
-
-    print("\n── Custom Metrics Matrix ─────────────────────────────────────────────────────────────────")
-    print(f"{'Metric':<15} {'Samples':>8} {'Mean':>10} {'Median':>10} {'p05':>10} {'p95':>10} {'Min':>10} {'Max':>10}")
-    print(
-        f"{'buffer_underrun':<15} {buffer_stats['samples']:>8} {_fmt(buffer_stats['mean']):>10} {_fmt(buffer_stats['median']):>10} {_fmt(buffer_stats['p05']):>10} {_fmt(buffer_stats['p95']):>10} {_fmt(buffer_stats['min']):>10} {_fmt(buffer_stats['max']):>10}")
-    print(
-        f"{'startup_time':<15} {startup_stats['samples']:>8} {_fmt(startup_stats['mean']):>10} {_fmt(startup_stats['median']):>10} {_fmt(startup_stats['p05']):>10} {_fmt(startup_stats['p95']):>10} {_fmt(startup_stats['min']):>10} {_fmt(startup_stats['max']):>10}")
-    print("──────────────────────────────────────────────────────────────────────────────────────────\n")
+    logging.info(f"Startup time for user {userid}: {duration:.3f}s")
 
 
 # ── Locust User ────────────────────────────────────────────────────────────────
@@ -86,11 +30,10 @@ class HLSUser(FastHttpUser):
 
     def on_start(self) -> None:
         if self.host is None:
-            raise ValueError("Host must be the playlist URL (e.g. http://localhost:8000/playlist.m3u8)")
-
-        self._stream = HLSSession(self.host, self.client, self.environment, gevent.sleep)
+            raise StopUser("Host must be the playlist URL (e.g. http://localhost:8000/playlist.m3u8)")
+        self._stream = HLSSession(self.host, min, self.client, self.environment, gevent.sleep)
 
     @task
     def stream(self):
         if not self._stream.step():
-            self.stop(force=True)
+            raise StopUser()
