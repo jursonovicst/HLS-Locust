@@ -114,11 +114,11 @@ class ABRPlayer:
             raise BufferUnderrunError(f"Buffer underrun, played {self._play_started_ts - self._buffer_end_ts:.2f}s", time_wc=self._ts_to_wc(self._buffer_end_ts))
 
     @property
-    def buffer_level(self) -> float | None:
+    def buffer_level(self) -> float:
         """
-        :return: The duration of buffered media in seconds, or None if it is empty.
+        :return: The duration of buffered media in seconds, or 0 if it is empty.
         """
         assert self.is_playing, "Player must be playing"
 
         level = self._buffer_end_ts - self._clock_ts()
-        return level if level > 0 else None
+        return level if level > 0 else 0

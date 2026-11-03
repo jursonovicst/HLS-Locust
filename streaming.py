@@ -170,7 +170,7 @@ class HLSSession:
                 wait = 0.100
                 while True:  # if consequent segment fetches are unsuccessful, we leave this loop with a buffer underrun
                     try:
-                        buffer_level = self._player.advance()
+                        self._player.advance()
                         self._fetch_segment(media_segment.absolute_uri, name=media_segment.base_uri.rstrip("/").rsplit("/", 1)[-1])
                         self._last_media_sequence_seen = media_segment.media_sequence
                         break
@@ -180,8 +180,9 @@ class HLSSession:
                             raise
 
                         # server error, retry with exponential backoff
-                        self._sleep(wait)
-                        wait = min(wait * 2, buffer_level)  # no point to wait more than buffer level, underrun anyway
+                        self._player.advance()
+                        self._sleep(min(wait, self._player.buffer_level))  # no point to wait more than buffer level, underrun anyway
+                        wait *= 2
 
                 # buffer segment
                 self._player.buffer(Segment(media_segment.media_sequence, media_segment.duration))
